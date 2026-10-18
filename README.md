@@ -9,14 +9,27 @@ needed for the free models.
 
 ## Free models
 
-9 verified working (2026-10-18): `big-pickle`, `beam-free`,
-`mimo-v2.6-flash-free`, `nemotron-3.5-super-vl-free`,
-`nemotron-3.5-lightning-free`, `longcat-2.5-preview-free`,
-`deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, `space-bunny-free`.
-(`jev-1.13-free` is served only on the OpenAI Responses wire upstream and is
-not reachable through the chat bridge.)
+Verified live against the upstream catalog. `GET /v1/models` returns the
+current list with `free: true` flags (additions/removals upstream are picked
+up automatically).
 
-`GET /v1/models` returns the live catalog with `free: true` flags.
+| Model | Status (2026-10-18) |
+|---|---|
+| `big-pickle` | ✅ verified |
+| `beam-free` | ✅ verified |
+| `deepseek-v4.1-flash-free` | ✅ verified |
+| `glm-5.3-flash-free` | ✅ verified |
+| `longcat-2.5-preview-free` | ✅ verified |
+| `mimo-v2.6-flash-free` | ✅ verified |
+| `nemotron-3.5-lightning-free` | ✅ verified |
+| `nemotron-3.5-super-vl-free` | ✅ verified |
+| `space-bunny-free` | ✅ verified |
+| `jev-1.13-free` | ❌ unreachable — served only on the OpenAI Responses wire upstream, which the chat bridge does not route to |
+
+Free-tier catalog is limited-time promos upstream — models can rotate; the
+gateway's `/v1/models` always reflects what is currently available, and any
+model ending in `-free` (plus `big-pickle`) is routed through the free
+fingerprint automatically.
 
 ## Endpoints
 
