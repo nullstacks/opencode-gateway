@@ -412,13 +412,15 @@ async function handleModels(env) {
   return json(data, r.status);
 }
 
-async function handleFree(request, url, pathname, env) {
+async function handleFree(request, url, pathname, env, bodyJson = null, bodyText = null) {
   const wire = pathname === "/v1/messages" ? "messages" : pathname === "/v1/responses" ? "responses" : "chat";
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    return json({ error: { type: "invalid_request", message: "Body must be JSON." } }, 400);
+  let body = bodyJson;
+  if (!body) {
+    try {
+      body = bodyText != null ? JSON.parse(bodyText) : await request.json();
+    } catch {
+      return json({ error: { type: "invalid_request", message: "Body must be JSON." } }, 400);
+    }
   }
   if (!body || typeof body !== "object" || !body.model)
     return json({ error: { type: "invalid_request", message: "'model' is required." } }, 400);
@@ -524,7 +526,7 @@ async function handleFree(request, url, pathname, env) {
   return json(agg, 200, { "x-gateway-mode": "free" });
 }
 
-async function handleKeyed(request, url, pathname, zenKey) {
+async function handleKeyed(request, url, pathname, zenKey, bodyText = null, bodyJson = null, env = null) {
   const upstreamUrl = UPSTREAM + "/zen" + pathname + url.search;
   const headers = new Headers({ "content-type": "application/json", authorization: `Bearer ${zenKey}` });
   headers.set("x-api-key", zenKey);
@@ -533,12 +535,21 @@ async function handleKeyed(request, url, pathname, zenKey) {
   const ab = request.headers.get("anthropic-beta");
   if (ab) headers.set("anthropic-beta", ab);
   const init = { method: request.method, headers };
-  if (request.method === "POST") init.body = await request.text();
+  if (request.method === "POST") init.body = bodyText != null ? bodyText : await request.text();
   let resp;
   try {
     resp = await fetch(upstreamUrl, init);
   } catch (e) {
     return json({ error: { type: "upstream_error", message: `Upstream fetch failed: ${e.message}` } }, 502);
+  }
+  // Free-model fallback: harnesses (Hermes, OpenAI SDKs) always send an
+  // Authorization header — often a placeholder. If keyed mode fails on a
+  // model we can serve for free, retry through the free fingerprint.
+  const model = bodyJson?.model;
+  const badKey = resp.status === 401 || resp.status === 403 || resp.status >= 500;
+  if (badKey && model && isFreeModelID(model) &&
+      (pathname === "/v1/chat/completions" || pathname === "/v1/messages" || pathname === "/v1/responses")) {
+    return handleFree(request, url, pathname, env, bodyJson, bodyText);
   }
   const out = new Headers();
   const ct = resp.headers.get("content-type");
@@ -591,11 +602,18 @@ export default {
     const resolved = resolveKeys(request, url, env);
     if (resolved.error) return resolved.error;
 
+    // Parse body once so both modes share it (also enables free-model fallback).
+    let bodyJson = null, bodyText = null;
+    if (request.method === "POST") {
+      bodyText = await request.text();
+      try { bodyJson = JSON.parse(bodyText); } catch {}
+    }
+
     if (resolved.free) {
       if (path === "/v1/chat/completions" || path === "/v1/messages" || path === "/v1/responses")
-        return handleFree(request, url, path, env);
+        return handleFree(request, url, path, env, bodyJson, bodyText);
       return json({ error: { type: "auth_error", message: "Free mode supports chat/completions, messages and responses only." } }, 401);
     }
-    return handleKeyed(request, url, path, resolved.zenKey);
+    return handleKeyed(request, url, path, resolved.zenKey, bodyText, bodyJson, env);
   },
 };
