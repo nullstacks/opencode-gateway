@@ -24,7 +24,7 @@ up automatically).
 | `nemotron-3.5-lightning-free` | ✅ verified |
 | `nemotron-3.5-super-vl-free` | ✅ verified |
 | `space-bunny-free` | ✅ verified |
-| `jev-1.13-free` | ❌ unreachable — served only on the OpenAI Responses wire upstream, which the chat bridge does not route to |
+| `jev-1.13-free` | ✅ works — but it is a TypeSafe *decision* model, not chat; use `POST /v1/systemone` (below) |
 
 Free-tier catalog is limited-time promos upstream — models can rotate; the
 gateway's `/v1/models` always reflects what is currently available, and any
@@ -40,6 +40,32 @@ POST /v1/messages          Anthropic Messages wire (Claude Code compatible)
 POST /v1/responses         OpenAI Responses wire
 GET  /health
 ```
+
+## Jev / SystemOne (decision models)
+
+`jev-1.13` / `jev-1.13-free` are **not chat models** — they are TypeSafe
+decision models (classify state into answers with probabilities/confidence).
+They speak their own wire format on a dedicated endpoint, which the gateway
+passes through:
+
+```
+POST /v1/systemone
+{
+  "model": "jev-1.13-free",
+  "state": "My Stripe integration keeps failing for 3 days.",
+  "questions": {
+    "department": {"type": "choice", "instructions": "Which team should handle this",
+                   "criteria": {"billing": "Payment issues", "technical": "Bugs"}},
+    "is_urgent": {"type": "noul", "instructions": "The customer explicitly requests a refund"}
+  }
+}
+```
+
+Response: `{"answers": {"department": {"choice": "billing", "confidence": 0.44, ...}, ...}}`
+Question types: `choice` (≤255 options), `score` (2–10 ordered levels), `noul`
+(true/false). Free tier verified working — see
+[the Jev guide](https://openrouter.ai/docs/guides/community/jev) and the
+[API reference](https://typesafe-jev.com/en/guides/api/) for the full schema.
 
 ## How the free tier works
 

@@ -42,6 +42,12 @@ const KNOWN_FREE = new Set(["big-pickle"]);
 const STUB_NAMES = ["bash", "glob", "grep", "read"];
 
 const PROXY_PATHS = new Set(["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/completions", "/v1/embeddings"]);
+// Jev/SystemOne is a TypeSafe DECISION model (state + questions -> answers
+// with probabilities), not a chat model — it has its own wire format and
+// endpoint. Free-tier verified: POST /inference/systemone/v1/systemone with
+// the standard fingerprint headers, plain JSON body (no stream/tools gate).
+const SYSTEMONE_PATH = "/v1/systemone";
+const SYSTEMONE_UPSTREAM = "/inference/systemone/v1/systemone";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -366,6 +372,38 @@ function resolveKeys(request, url, env) {
   return { zenKey: free ? null : zenKey, free };
 }
 
+// Pass-through for the Jev/SystemOne decision wire (free tier verified).
+// Body: {"model":"jev-1.13-free","state":...,"questions":{...}} — see
+// https://openrouter.ai/docs/guides/community/jev
+async function handleSystemOne(request, env) {
+  const uaVersion = (env.OC_UA_VERSION || OC_UA_VERSION).trim();
+  const session = ocSessionID();
+  const headers = {
+    "content-type": "application/json",
+    authorization: "Bearer public",
+    "user-agent": `opencode/latest/${uaVersion}/cli`,
+    "x-opencode-client": "cli",
+    "x-opencode-project": "global",
+    "x-opencode-session": session,
+    "x-session-id": session,
+    "x-session-affinity": session,
+    "x-opencode-session-id": session,
+    accept: "application/json",
+  };
+  const raw = await request.text();
+  let resp;
+  try {
+    resp = await fetch(UPSTREAM + SYSTEMONE_UPSTREAM, { method: "POST", headers, body: raw });
+  } catch (e) {
+    return json({ error: { type: "upstream_error", message: `Upstream fetch failed: ${e.message}` } }, 502);
+  }
+  const text = await resp.text();
+  return new Response(text, {
+    status: resp.status,
+    headers: { "content-type": resp.headers.get("content-type") || "application/json", ...CORS, "x-gateway-mode": "free", "x-gateway-upstream-status": String(resp.status) },
+  });
+}
+
 async function handleModels(env) {
   const r = await fetch(UPSTREAM + "/zen/v1/models");
   const data = await r.json();
@@ -533,6 +571,10 @@ export default {
     }
 
     if (path === "/v1/models" && request.method === "GET") return handleModels(env);
+
+    if (request.method === "POST" && path === SYSTEMONE_PATH) {
+      return handleSystemOne(request, env);
+    }
 
     if (request.method !== "POST" || !PROXY_PATHS.has(path)) {
       return json(
