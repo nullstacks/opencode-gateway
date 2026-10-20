@@ -1,11 +1,24 @@
 # opencode-gateway
 
-Cloudflare Worker that lets **any** harness (Claude Code, Codex CLI, Aider,
-OpenHands, LangChain, curl, ...) use **OpenCode models** through one
-OpenAI/Anthropic-compatible endpoint — **no OpenCode account or API key**
-needed for the free models.
+Cloudflare Worker **or Python Flask server** that lets **any** harness
+(Claude Code, Codex CLI, Aider, OpenHands, LangChain, curl, ...) use
+**OpenCode models** through one OpenAI/Anthropic-compatible endpoint —
+**no OpenCode account or API key** needed for the free models.
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nullstacks/opencode-gateway)
+
+## Two runtimes, same API
+
+| | Cloudflare Worker | Python (Flask) |
+|---|---|---|
+| Files | `worker.js` + `bridge.js` | `server.py` + `bridge.py` |
+| Runtime | edge, no server | local machine, VPS, Docker, systemd… |
+| Install | `npx wrangler deploy` | `pip install -r requirements.txt` |
+| Secrets | dashboard secrets | env vars (`ZEN_API_KEY`, `GATEWAY_KEY`, `OC_UA_VERSION`) |
+
+Both expose identical endpoints and the identical free-tier fingerprint.
+The Python bridge is cross-validated against the Worker's `bridge.js`
+(Anthropic/Responses ↔ chat conversion, SSE aggregation and re-emission).
 
 ## Free models
 
@@ -38,6 +51,7 @@ GET  /v1/models            catalog
 POST /v1/chat/completions  OpenAI Chat wire (stream + non-stream)
 POST /v1/messages          Anthropic Messages wire (Claude Code compatible)
 POST /v1/responses         OpenAI Responses wire
+POST /v1/systemone         Jev/SystemOne decision wire (free tier)
 GET  /health
 ```
 
@@ -70,14 +84,14 @@ Question types: `choice` (≤255 options), `score` (2–10 ordered levels), `nou
 ## How the free tier works
 
 OpenCode's free tier is not account-gated — it is **client-shape gated**.
-This worker reproduces the official opencode CLI fingerprint on every free
+Both runtimes reproduce the official opencode CLI fingerprint on every free
 request (reverse-engineered by the
 [opencode2api](https://github.com/6Kmfi6HP/opencode2api) project, documented
 in their [UPSTREAM-COMPAT.md](https://github.com/6Kmfi6HP/opencode2api/blob/main/docs/UPSTREAM-COMPAT.md)):
 
 1. Upstream path `/inference/openai/v1/chat/completions` — all free models
    accept the OpenAI chat wire; Anthropic/Responses client requests are
-   bridged locally (`bridge.js`, same architecture as
+   bridged locally (`bridge.js` / `bridge.py`, same architecture as
    [zen-proxy](https://github.com/12errh/zen-proxy))
 2. `User-Agent: opencode/latest/<ver>/cli` — version pinned (`2.0.29`); the
    gate rejects too-old AND too-new versions
@@ -93,9 +107,10 @@ in their [UPSTREAM-COMPAT.md](https://github.com/6Kmfi6HP/opencode2api/blob/main
 > ⚠️ **Fragility:** this is an adversarial compat layer, not a stable API.
 > OpenCode has tightened the gate five times between 2026-09-17 and
 > 2026-10-15. If free models start returning `403 FreeTierError`, check the
-> compat doc above and re-pin the version via the `OC_UA_VERSION` secret.
+> compat doc above and re-pin the version via the `OC_UA_VERSION` secret /
+> env var.
 
-## Deploy
+## Deploy to Cloudflare Workers
 
 **Option A — button above** (Deploys to Cloudflare from this repo).
 
@@ -120,25 +135,52 @@ npx wrangler deploy
 npx wrangler secret put ZEN_API_KEY
 ```
 
+## Run the Python server
+
+```bash
+pip install -r requirements.txt          # flask + httpx
+python3 server.py                        # serves on 0.0.0.0:8080 (PORT/HOST to override)
+```
+
+Production options:
+
+```bash
+gunicorn -w 4 -b 0.0.0.0:8080 server:app
+flask --app server run --host 0.0.0.0 --port 8080
+```
+
+A `Dockerfile` is included: `docker build -t opencode-gateway . && docker run -p 8080:8080 opencode-gateway`.
+
+### Environment variables (Python, optional)
+
+| Variable | Purpose |
+|---|---|
+| `ZEN_API_KEY` | fallback Zen key — unlocks paid models for keyless callers |
+| `GATEWAY_KEY` | require callers to present this key (lock public deployments) |
+| `OC_UA_VERSION` | override the pinned opencode CLI version |
+| `PORT` / `HOST` | bind address (default `0.0.0.0:8080`) |
+
 ## Usage
 
 ```bash
 # OpenAI client — free model, no key
-curl https://<your-worker>.workers.dev/v1/chat/completions \
+curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"glm-5.3-flash-free","messages":[{"role":"user","content":"hi"}]}'
 
 # Paid model — pass your Zen key from https://opencode.ai/auth
-curl ... -H "Authorization: Bearer <zen-key>" -d '{"model":"gpt-5.5",...}'
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer <zen-key>" \
+  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}'
 
 # Claude Code
-export ANTHROPIC_BASE_URL=https://<your-worker>.workers.dev
+export ANTHROPIC_BASE_URL=http://localhost:8080
 export ANTHROPIC_API_KEY=free
 export ANTHROPIC_MODEL=glm-5.3-flash-free
 ```
 
 Key resolution order: `X-Zen-Key` header → `?key=` → `Authorization: Bearer`
-→ `x-api-key` → `ZEN_API_KEY` secret. `public` / empty = free tier.
+→ `x-api-key` → `ZEN_API_KEY` env. `public` / empty = free tier.
 
 ## License
 
